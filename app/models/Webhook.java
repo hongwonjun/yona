@@ -23,14 +23,17 @@ package models;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import models.enumeration.EventType;
 import models.enumeration.ResourceType;
 import models.resource.GlobalResource;
 import models.resource.Resource;
 import models.resource.ResourceConvertible;
 import org.eclipse.jgit.revwalk.RevCommit;
 import play.Logger;
+import play.api.i18n.Lang;
 import play.data.validation.Constraints.Required;
 import play.db.ebean.Model;
+import play.i18n.Messages;
 import play.libs.F.Function;
 import play.libs.Json;
 import play.libs.ws.WS;
@@ -82,24 +85,32 @@ public class Webhook extends Model implements ResourceConvertible {
     public String secret;
 
     /**
+     * Type of webhook (true = all cases, false = only push)
+     */
+    public Boolean sendAllCases;
+
+    /**
      * Payload URL of webhook.
      */
     public Date createdAt;
+
 
     /**
      * Construct a webhook by the given {@code payloadUrl} and {@code secret}.
      *
      * @param projectId the ID of project which will have this webhook
      * @param payloadUrl the payload URL for this webhook
+     * @param sendAllCases type of webhook (true = all cases, false = only push)
      * @param secret the secret token for server identity
      */
-    public Webhook(Long projectId, String payloadUrl, String secret) {
+    public Webhook(Long projectId, String payloadUrl, String secret, Boolean sendAllCases) {
         if (secret == null) {
             secret = "";
         }
         this.project = Project.find.byId(projectId);
         this.payloadUrl = payloadUrl;
         this.secret = secret;
+        this.sendAllCases = sendAllCases;
         this.createdAt = new Date();
     }
 
@@ -130,9 +141,9 @@ public class Webhook extends Model implements ResourceConvertible {
         return find.where().eq("project.id", projectId).findList();
     }
 
-    public static void create(Long projectId, String payloadUrl, String secret) {
+    public static void create(Long projectId, String payloadUrl, String secret, Boolean sendAllCases) {
         if (!payloadUrl.isEmpty()) {
-            Webhook webhook = new Webhook(projectId, payloadUrl, secret);
+            Webhook webhook = new Webhook(projectId, payloadUrl, secret, sendAllCases);
             webhook.save();
         }
         // TODO : Raise appropriate error when required field is empty
@@ -148,16 +159,14 @@ public class Webhook extends Model implements ResourceConvertible {
                 .eq("project.id", projectId)
                 .findUnique();
     }
-    
-    public void sendRequestToPayloadUrl(String[] eventTypes, List<RevCommit> commits, List<String> refNames, User sender, String title) {
-        String requestBodyString = buildRequestBody(eventTypes, commits, refNames, sender, title);
 
+    private void sendRequest(String payload) {
         try {
             WSRequestHolder requestHolder = WS.url(this.payloadUrl);
             requestHolder
                     .setHeader("Content-Type", "application/json")
                     .setHeader("User-Agent", "Yobi-Hookshot")
-                    .post(requestBodyString)
+                    .post(payload)
                     .map(
                             new Function<WSResponse, Integer>() {
                                 public Integer apply(WSResponse response) {
@@ -166,7 +175,7 @@ public class Webhook extends Model implements ResourceConvertible {
                                     if (statusCode < 200 || statusCode >= 300) {
                                         // Unsuccessful status code - log some information in server.
                                         Logger.info("[Webhook] Request responded code " + Integer.toString(statusCode) + ": " + statusText);
-                                        Logger.info("[Webhook] Request payload: " + requestBodyString);
+                                        Logger.info("[Webhook] Request payload: " + payload);
                                     }
                                     return 0;
                                 }
@@ -176,6 +185,21 @@ public class Webhook extends Model implements ResourceConvertible {
             // Request failed (Dead end point or invalid payload URL) - log some information in server.
             Logger.info("[Webhook] Request failed at given payload URL: " + this.payloadUrl);
         }
+    }
+    
+    public void sendRequestToPayloadUrl(String[] eventTypes, List<RevCommit> commits, List<String> refNames, User sender, String title) {
+        String requestBodyString = buildRequestBody(eventTypes, commits, refNames, sender, title);
+        sendRequest(requestBodyString);
+    }
+
+    public void sendRequestToPayloadUrl(EventType eventType, User sender, Issue eventIssue) {
+        String requestBodyString = buildRequestBody(eventType, sender, eventIssue);
+        sendRequest(requestBodyString);
+    }
+
+    public void sendRequestToPayloadUrl(EventType eventType, User sender, PullRequest eventPullRequest) {
+        String requestBodyString = buildRequestBody(eventType, sender, eventPullRequest);
+        sendRequest(requestBodyString);
     }
 
     private String buildRequestBody(String[] eventTypes, List<RevCommit> commits, List<String> refNames, User sender, String title) {
@@ -220,6 +244,87 @@ public class Webhook extends Model implements ResourceConvertible {
 
         return Json.stringify(requestBody);
     }
+
+    private String buildRequestBody(EventType eventType, User sender, PullRequest eventPullRequest) {
+        ObjectMapper mapper = new ObjectMapper();
+        ArrayNode detailFieldsArray = mapper.createArrayNode();
+        ArrayNode attachmentsArray = mapper.createArrayNode();
+        ObjectNode requestBody = Json.newObject();
+        ObjectNode attachmentsJSON = Json.newObject();
+        ObjectNode contributorJSON = Json.newObject();
+        ObjectNode fromJSON = Json.newObject();
+        ObjectNode toJSON = Json.newObject();
+
+        String requestMeesage = "[" + project.name + "] "+ sender.name + " ";
+
+        switch (eventType) {
+            case NEW_PULL_REQUEST:
+                requestMeesage += Messages.get(Lang.defaultLang(), "notification.type.new.pullrequest");
+                break;
+        }
+        requestMeesage += " <" + project.siteurl + "/pullRequest/" + eventPullRequest.id + "|#" + eventPullRequest.id + ": " + eventPullRequest.title + ">";
+        requestBody.put("text", requestMeesage);
+
+        contributorJSON.put("title", Messages.get(Lang.defaultLang(), "pullRequest.sender"));
+        contributorJSON.put("value", eventPullRequest.contributor.name);
+        detailFieldsArray.add(contributorJSON);
+
+        fromJSON.put("title", Messages.get(Lang.defaultLang(), "pullRequest.from"));
+        fromJSON.put("value", eventPullRequest.fromBranch);
+        detailFieldsArray.add(fromJSON);
+
+        toJSON.put("title", Messages.get(Lang.defaultLang(), "pullRequest.to"));
+        toJSON.put("value", eventPullRequest.toBranch);
+        detailFieldsArray.add(toJSON);
+
+        attachmentsJSON.put("text", eventPullRequest.body);
+        attachmentsJSON.put("fields", detailFieldsArray);
+        attachmentsArray.add(attachmentsJSON);
+
+        requestBody.put("attachments", attachmentsArray);
+
+        return Json.stringify(requestBody);
+    }
+
+    private String buildRequestBody(EventType eventType, User sender, Issue eventIssue) {
+        ObjectMapper mapper = new ObjectMapper();
+        ArrayNode detailFieldsArray = mapper.createArrayNode();
+        ArrayNode attachmentsArray = mapper.createArrayNode();
+        ObjectNode requestBody = Json.newObject();
+        ObjectNode attachmentsJSON = Json.newObject();
+        ObjectNode assigneeJSON = Json.newObject();
+        ObjectNode stateJSON = Json.newObject();
+
+        String requestMeesage = "[" + project.name + "] "+ sender.name + " ";
+
+        switch (eventType) {
+            case NEW_ISSUE:
+                requestMeesage += Messages.get(Lang.defaultLang(), "notification.type.new.issue");
+                break;
+            case ISSUE_STATE_CHANGED:
+                requestMeesage += Messages.get(Lang.defaultLang(), "notification.type.issue.state.changed");
+                break;
+        }
+        requestMeesage += " <" + project.siteurl + "/issue/" + eventIssue.id + "|#" + eventIssue.id + ": " + eventIssue.title + ">";
+        requestBody.put("text", requestMeesage);
+
+        assigneeJSON.put("title", Messages.get(Lang.defaultLang(), "issue.assignee"));
+        assigneeJSON.put("value", eventIssue.assigneeName());
+        detailFieldsArray.add(assigneeJSON);
+
+        stateJSON.put("title", Messages.get(Lang.defaultLang(), "issue.state"));
+        stateJSON.put("value", eventIssue.state.toString());
+        detailFieldsArray.add(stateJSON);
+
+        attachmentsJSON.put("text", eventIssue.body);
+        attachmentsJSON.put("fields", detailFieldsArray);
+        attachmentsArray.add(attachmentsJSON);
+
+        requestBody.put("attachments", attachmentsArray);
+
+        return Json.stringify(requestBody);
+    }
+
 
     private ObjectNode buildJSONFromCommit(Project project, RevCommit commit) {
         GitCommit gitCommit = new GitCommit(commit);

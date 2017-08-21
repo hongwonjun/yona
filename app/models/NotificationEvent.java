@@ -428,6 +428,15 @@ public class NotificationEvent extends Model implements INotificationEvent {
         notiEvent.oldValue = null;
         notiEvent.newValue = pullRequest.body;
         NotificationEvent.add(notiEvent);
+
+        List<Webhook> webhookList = Webhook.findByProject(pullRequest.toProjectId);
+        for (Webhook webhook : webhookList) {
+            if (webhook.sendAllCases) {
+                // Send push event via webhook payload URLs.
+                webhook.sendRequestToPayloadUrl(NEW_PULL_REQUEST, UserApp.currentUser(), pullRequest);
+            }
+        }
+
         return notiEvent;
     }
 
@@ -627,6 +636,14 @@ public class NotificationEvent extends Model implements INotificationEvent {
 
         NotificationEvent.add(notiEvent);
 
+        List<Webhook> webhookList = Webhook.findByProject(issue.project.id);
+        for (Webhook webhook : webhookList) {
+            if (webhook.sendAllCases) {
+                // Send push event via webhook payload URLs.
+                webhook.sendRequestToPayloadUrl(ISSUE_STATE_CHANGED, UserApp.currentUser(), issue);
+            }
+        }
+
         return notiEvent;
     }
 
@@ -690,6 +707,14 @@ public class NotificationEvent extends Model implements INotificationEvent {
 
     public static void afterNewIssue(Issue issue) {
         NotificationEvent.add(forNewIssue(issue, UserApp.currentUser()));
+
+        List<Webhook> webhookList = Webhook.findByProject(issue.project.id);
+        for (Webhook webhook : webhookList) {
+            if (webhook.sendAllCases) {
+                // Send push event via webhook payload URLs.
+                webhook.sendRequestToPayloadUrl(NEW_ISSUE, UserApp.currentUser(), issue);
+            }
+        }
     }
 
     public static NotificationEvent forNewIssue(Issue issue, User author) {
@@ -868,9 +893,11 @@ public class NotificationEvent extends Model implements INotificationEvent {
 
         List<Webhook> webhookList = Webhook.findByProject(project.id);
         for (Webhook webhook : webhookList) {
-            // Send push event via webhook payload URLs.
-            String[] eventTypes = {"push"};
-            webhook.sendRequestToPayloadUrl(eventTypes, commits, refNames, sender, title);
+            if (!webhook.sendAllCases) {
+                // Send push event via webhook payload URLs.
+                String[] eventTypes = {"push"};
+                webhook.sendRequestToPayloadUrl(eventTypes, commits, refNames, sender, title);
+            }
         }
     }
 
