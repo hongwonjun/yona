@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.eclipse.jgit.revwalk.RevCommit;
+import org.apache.commons.lang3.StringUtils;
 
 import models.enumeration.EventType;
 import models.enumeration.PullRequestReviewAction;
@@ -311,21 +312,22 @@ public class Webhook extends Model implements ResourceConvertible {
     }
 
     private String buildRequestBody(EventType eventType, User sender, Posting eventPost) {
-        String requestMessage = "[" + project.name + "] "+ sender.name + " ";
+        StringBuilder requestMessage = new StringBuilder();
+        requestMessage.append(String.format("[%s] %s ", project.name, sender.name));
 
         switch (eventType) {
             case NEW_POSTING:
-                requestMessage += Messages.get(Lang.defaultLang(), "notification.type.new.posting");
+                requestMessage.append(Messages.get(Lang.defaultLang(), "notification.type.new.posting"));
                 break;
             default:
                 play.Logger.warn("Unknown webhook event: " + eventType);
         }
 
         String eventPostUrl = RouteUtil.getUrl(eventPost);
-
-        requestMessage += buildRequestMessage(eventPostUrl, "#" + eventPost.number + ": " + eventPost.title);
-        return requestMessage;
+        requestMessage.append(buildRequestMessage(eventPostUrl, "#" + eventPost.number + ": " + eventPost.title));
+        return requestMessage.toString();
     }
+
 
     // Comment
     public void sendRequestToPayloadUrl(EventType eventType, User sender, Comment eventComment) {
@@ -582,10 +584,12 @@ public class Webhook extends Model implements ResourceConvertible {
         play.Logger.info(payload);
         try {
             WSRequestHolder requestHolder = WS.url(this.payloadUrl);
+            if (StringUtils.isNotBlank(this.secret)) {
+                requestHolder.setHeader("Authorization", "token " + this.secret);
+            }
             requestHolder
                     .setHeader("Content-Type", "application/json")
                     .setHeader("User-Agent", "Yobi-Hookshot")
-                    .setHeader("Authorization", "token " + this.secret)
                     .post(payload)
                     .map(
                             new Function<WSResponse, Integer>() {
@@ -611,10 +615,12 @@ public class Webhook extends Model implements ResourceConvertible {
         play.Logger.info(payload);
         try {
             WSRequestHolder requestHolder = WS.url(this.payloadUrl);
+            if (StringUtils.isNotBlank(this.secret)) {
+                requestHolder.setHeader("Authorization", "token " + this.secret);
+            }
             requestHolder
                     .setHeader("Content-Type", "application/json")
                     .setHeader("User-Agent", "Yobi-Hookshot")
-                    .setHeader("Authorization", "token " + this.secret)
                     .post(payload)
                     .map(
                             new Function<WSResponse, Integer>() {
