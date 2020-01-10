@@ -235,7 +235,7 @@ public class Webhook extends Model implements ResourceConvertible {
                 play.Logger.warn("Unknown webhook event: " + eventType);
         }
 
-        String eventIssueUrl = RouteUtil.getUrl(eventIssue);
+        String eventIssueUrl = controllers.routes.IssueApp.issue(eventIssue.project.owner, eventIssue.project.name, eventIssue.getNumber()).url();
 
         requestMessage += buildRequestMessage(eventIssueUrl, "#" + eventIssue.number + ": " + eventIssue.title);
         return requestMessage;
@@ -268,7 +268,7 @@ public class Webhook extends Model implements ResourceConvertible {
 
         requestMessage += Messages.get(Lang.defaultLang(), "notification.type.issue.moved", previous.name, project.name);
 
-        String eventIssueUrl = RouteUtil.getUrl(eventIssue);
+        String eventIssueUrl = controllers.routes.IssueApp.issue(eventIssue.project.owner, eventIssue.project.name, eventIssue.getNumber()).url();
 
         requestMessage += buildRequestMessage(eventIssueUrl, "#" + eventIssue.number + ": " + eventIssue.title);
         return requestMessage;
